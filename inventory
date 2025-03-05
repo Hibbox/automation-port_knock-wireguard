@@ -1,0 +1,5 @@
+[vpn]
+BastionGuaccamoleWireguard
+
+[server]
+serverraspberry

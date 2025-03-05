@@ -1,0 +1,7 @@
+[servers]
+bastionguaccamolewireguard ansible_host=192.168.56.10 ansible_port=22598
+serverraspberry ansible_host=192.168.56.11 ansible_port=52599
+
+[client_vpn]
+localhost ansible_connection=local wireguard_ip=10.0.0.11
+serverraspbery ansible_host=192.168.56.11 wireguard_ip=10.0.0.12 ansible_port=52599

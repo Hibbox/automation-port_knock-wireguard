@@ -1,0 +1,143 @@
+#!/usr/sbin/nft -f
+flush ruleset
+
+define pub_iface = "eth1"
+define wg_iface = "wg0"
+define wg_port = 51820
+
+	
+table ip nat {
+	chain postrouting {
+		type nat hook postrouting priority 100; policy accept;
+		oifname $pub_iface masquerade
+	}
+}
+
+table ip6 nat {
+	chain postrouting {
+		type nat hook postrouting priority 100; policy accept;
+		oifname $pub_iface masquerade
+	}
+}
+table inet filter {
+    #####################################################################
+    ## Définition des ensembles dynamiques pour suivre les étapes du code ##
+    #####################################################################
+    set P1 {
+        type ipv4_addr
+        flags dynamic, timeout
+        timeout 10s
+    }
+    set P2 {
+        type ipv4_addr
+        flags dynamic, timeout
+        timeout 10s
+    }
+    set P3 {
+        type ipv4_addr
+        flags dynamic, timeout
+        timeout 10s
+    }
+    set P4 {
+        type ipv4_addr
+        flags dynamic, timeout
+        timeout 10s
+    }
+
+		
+    chain input {
+        type filter hook input priority 0; policy drop;
+
+        # accept all loopback packets
+        iif "lo" accept
+        # accept all icmp/icmpv6 packets
+        meta l4proto { icmp, ipv6-icmp } accept
+        # accept all packets that are part of an already-established connection
+        ct state vmap { invalid : drop, established : accept, related : accept }
+
+	ip saddr 192.168.56.12 tcp dport 22599 accept
+	iifname $wg_iface tcp dport 22599 accept
+
+        tcp dport 100 update @P1 { ip saddr timeout 10s } accept
+
+        # Phase 2 : Sur le port 200, si l’IP figure dans P1,
+        # on passe dans la chaîne into_p2 qui la retire de P1, la place dans P2 et loggue
+        tcp dport 200 ip saddr @P1 jump into_p2
+
+        # Phase 3 : Sur le port 300, si l’IP figure dans P2,
+        # on passe dans la chaîne into_p3 qui la retire de P2, la place dans P3 et loggue
+        tcp dport 300 ip saddr @P2 jump into_p3
+
+        # Phase 4 : Sur le port 400, si l’IP figure dans P3,
+        # on passe dans la chaîne into_p4 qui la retire de P3, la place dans P4 et loggue
+        tcp dport 400 ip saddr @P3 jump into_p4
+
+        ###########################################################
+        ## Ouverture du SSH pour les IP ayant atteint la phase 4 ##
+        ###########################################################
+        tcp dport 22599 ip saddr @P4 accept
+
+        # Sinon, pour toute nouvelle connexion SSH, on refuse
+        tcp dport 22599 ct state new drop
+
+    #####################################################################
+        # drop new connections over rate limit
+        ct state new limit rate over 1/second burst 10 packets drop
+
+        # accept all DHCPv6 packets received at a link-local address
+        ip6 daddr fe80::/64 udp dport dhcpv6-client accept
+        # accept all SSH packets received on a public interface
+        iifname $pub_iface tcp dport 22599 accept
+        # accept all WireGuard packets received on a public interface
+        iifname $pub_iface udp dport $wg_port accept
+
+        # accept all HTTP packets received on a WireGuard interface
+        iifname $wg_iface tcp dport 22599 accept
+
+        # reject with polite "port unreachable" icmp response
+        reject
+}
+    
+
+chain forward {
+
+	type filter hook forward priority 0; policy drop;
+	ct state established,related accept 
+	
+	iifname $wg_iface oifname $wg_iface accept
+
+	reject
+}
+    #####################################################################
+    ## Chaîne into_p2 – Phase 2                                      ##
+    #####################################################################
+chain into_p2 {
+        # Retirer l’IP de P1 (similaire à --remove)
+        delete @P1 { ip saddr }
+        # Ajouter l’IP dans P2 (similaire à --set)
+        update @P2 { ip saddr timeout 10s }
+        # Enregistrer un log (préfixe "INTO P2: ")
+        log prefix "INTO P2: "
+        accept
+    }
+
+    #####################################################################
+    ## Chaîne into_p3 – Phase 3                                      ##
+    #####################################################################
+    chain into_p3 {
+        delete @P2 { ip saddr }
+        update @P3 { ip saddr timeout 10s }
+        log prefix "INTO P3: "
+        accept
+    }
+
+    #####################################################################
+    ## Chaîne into_p4 – Phase 4                                      ##
+    #####################################################################
+    chain into_p4 {
+        delete @P3 { ip saddr }
+        update @P4 { ip saddr timeout 10s }
+        log prefix "INTO P4: "
+        accept
+    }
+}

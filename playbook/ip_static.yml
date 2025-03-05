@@ -1,0 +1,46 @@
+---
+
+- name: Convert DHCP to Static IP
+  hosts: all
+  become: yes
+  tasks:
+    - name: Get current IP address
+      command: ip -4 addr show eth1
+      register: ip_output
+
+    - name: Extract IP address
+      set_fact:
+        current_ip: "{{ ip_output.stdout_lines | select('search', 'inet') | map('regex_search', '\\d+\\.\\d+\\.\\d+\\.\\d+') | select('string') | list | first }}"
+
+    - name: Get Gateway
+      command: ip route show default
+      register: gw_output
+
+    - name: Extract Gateway
+      set_fact:
+        gateway_ip: "{{ gw_output.stdout | regex_search('default via (\\d+\\.\\d+\\.\\d+\\.\\d+)', '\\1') | first }}"
+
+    - name: Backup current interfaces file
+      copy:
+        src: /etc/network/interfaces
+        dest: /etc/network/interfaces.bak
+        remote_src: yes
+
+    - name: Configure static IP
+      copy:
+        dest: /etc/network/interfaces
+        content: |
+          auto eth0
+          iface eth0 inet dhcp
+
+          auto eth1
+          iface eth1 inet static
+              address {{ current_ip }}
+              netmask 255.255.255.0
+              gateway {{ gateway_ip }}
+
+    - name: Restart networking service
+      service:
+        name: networking
+        state: restarted
+

@@ -1,0 +1,12 @@
+[Interface]
+
+Address = 10.0.0.1/24
+ListenPort = 51820
+PrivateKey = {{ server_privkey | trim }}
+
+{% for host in groups['client_vpn'] %}
+[Peer]
+
+PublicKey = {{ hostvars[host].pubkey }}
+AllowedIPs = 10.0.0.{{ loop.index + 10 }}/32
+{% endfor %}

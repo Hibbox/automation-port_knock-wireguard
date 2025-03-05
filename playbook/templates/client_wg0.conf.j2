@@ -1,0 +1,16 @@
+[Interface]
+
+Address = {{ wireguard_ip }}/32
+
+PostUp = wg set %i private-key /etc/wireguard/privatekey
+
+PostUp = ping -c1 10.0.0.1 || true
+
+[Peer]
+
+PublicKey = {{ server_pubkey }}
+
+Endpoint = {{ hostvars['bastionguaccamolewireguard'].ansible_host }}:51820
+
+AllowedIPs = 10.0.0.0/24
+

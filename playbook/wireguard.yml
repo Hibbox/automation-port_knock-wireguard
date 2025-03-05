@@ -1,0 +1,152 @@
+---
+
+- name: setup vpn client
+  hosts: client_vpn
+  become: yes
+  tasks:
+
+  - name: install wireguard package
+    apt:
+      name: wireguard
+      state: present
+      update_cache: yes
+
+  - name: directory /etc/wireguard exist ?
+    file:
+      path: /etc/wireguard
+      state: directory
+      mode: '0700'
+
+
+  - name: generate client key
+    shell: 
+      umask 077 && wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
+    args:
+      creates: /etc/wireguard/publickey
+
+
+  - name: get public key
+    command: cat /etc/wireguard/publickey
+    register: publickey_contents
+    changed_when: False
+  
+  - name: set public key fact
+    set_fact:
+      pubkey: "{{ publickey_contents.stdout  }}"
+
+  - name: create client wireguard config
+    template:
+      dest: /etc/wireguard/wg0.conf
+      src: client_wg0.conf.j2
+      owner: root
+      group: root
+      mode: '0600'
+    notify: restart wireguard
+  
+  handlers:
+    - name: restart wireguard
+      shell: wg-quick down wg0; wg-quick up wg0
+      args:
+        executable: /bin/bash
+          
+- name: setup vpn server
+  hosts: bastionguaccamolewireguard
+  vars:
+    server_privkey: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          656564326138373339383761353335373462636531633333333838333565366664323930393739356239326439363765366465373032343537383363333462630a616531343030343264396435643532396533653864633362393134376234653431623333633466616130393930313435666239303331653532653961653130660a376330633331613066646566393332636165343563636166336462393937313634656561326261666139373338396563666335636432393330393934316534333265386337303263633234343630613033613834343761326364613264336635
+  tasks:
+
+    - name: install wireguard package
+      become: true
+      apt:
+        name: wireguard
+        state: present
+        update_cache: yes
+
+    - name: Generate server public key dynamically
+      shell: echo "{{ server_privkey }}" | wg pubkey
+      register: server_public_key_raw
+
+    - name: 
+      set_fact:
+        shared_server_pubkey: "{{ server_public_key_raw.stdout }}"
+
+    - name: create server wireguard configi
+      template:
+        dest: /etc/wireguard/wg0.conf
+        src: server_wg0.conf.j2
+        owner: root
+        group: root
+        mode: '0600'
+      notify: reload wireguard config
+
+    - name: enbale and persist ip forwarding
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        state: present
+        sysctl_set: yes
+        reload: yes
+    - name: start wireguard and enable on boot
+      systemd:
+        name: wg-quick@wg0
+        enabled: yes
+        state: started
+    - name: recuperation d'ip dans le fichier config
+      shell: wg-quick down wg0 && wg-quick up wg0
+      args:
+        executable: /bin/bash
+  handlers:
+    - name: reload wireguard config
+      shell: wg syncconf wg0 <(wg-quick strip wg0)
+      args:
+        executable: /bin/bash
+          
+- name: config firewall
+  hosts: bastionguaccamolewireguard
+  become: yes
+  tasks: 
+  - name: Installer nftables
+    ansible.builtin.package:
+      name: nftables
+      state: present
+
+  - name: Deployer le fichier /etc/nftables.conf sur server vpn
+    ansible.builtin.template:
+      src: nftables.conf.j2
+      dest: /etc/nftables.conf
+      owner: root
+      group: root
+      mode: '0644'
+
+  - name: Activer l'IP forwarding
+    ansible.builtin.sysctl:
+      name: net.ipv4.ip_forward
+      value: '1'
+      state: present
+
+  - name: Appliquer la configuration nftables
+    ansible.builtin.command: nft -f /etc/nftables.conf
+
+- name: config server raspberry
+  hosts: serverraspberry
+  become: yes
+  tasks: 
+  - name: Deployer le fichier /etc/nftables.conf sur server raspberry
+    ansible.builtin.template:
+      src: nftables_server.conf.j2
+      dest: /etc/nftables.conf
+      owner: root
+      group: root
+      mode: '0644'
+
+  - name: Activer l'IP forwarding
+    ansible.builtin.sysctl:
+      name: net.ipv4.ip_forward
+      value: '1'
+      state: present
+
+  - name: Appliquer la configuration nftables
+    ansible.builtin.command: nft -f /etc/nftables.conf
+
